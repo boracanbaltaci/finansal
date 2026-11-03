@@ -94,15 +94,28 @@ const defaultState = () => ({
   customCats: [],   // {id, name, emoji, color}
   cards: [],        // {id, name, debt, limit, dueDay, color, log:[{ts, delta, note}]}
   car: { name: '', price: 0, deposits: [], mark: null }, // deposits:{id, amount, date, note, ts}  mark:{value, ts}
+  habits: DEFAULT_HABITS(), // {id, name, desc, emoji, color, target, start, log:{'YYYY-MM-DD': 1 (yaptım) | 0 (yapmadım)}}
 });
 
+// Kişisel gelişim alışkanlıkları: haftalık hedef (target) tutturulursa haftalık streak devam eder
+function DEFAULT_HABITS() {
+  return [
+    { id: 'english', name: 'İngilizce', desc: 'Okuma yap ya da yeni bir şey öğren', emoji: '📚', color: '#3b82f6', target: 5, start: todayStr(), log: {} },
+    { id: 'gym', name: 'Gym', desc: 'Antrenman', emoji: '🏋️', color: '#f97316', target: 3, start: todayStr(), log: {} },
+  ];
+}
+
+function normalize(raw) {
+  const st = Object.assign(defaultState(), raw || {});
+  st.car = Object.assign(defaultState().car, st.car || {});
+  if (!Array.isArray(st.habits)) st.habits = [];
+  for (const h of DEFAULT_HABITS()) if (!st.habits.some(x => x.id === h.id)) st.habits.push(h);
+  return st;
+}
+
 function load() {
-  try {
-    const raw = JSON.parse(localStorage.getItem(KEY));
-    const st = Object.assign(defaultState(), raw || {});
-    st.car = Object.assign(defaultState().car, st.car || {});
-    return st;
-  } catch { return defaultState(); }
+  try { return normalize(JSON.parse(localStorage.getItem(KEY))); }
+  catch { return defaultState(); }
 }
 
 let S = load();
@@ -210,10 +223,12 @@ const PAGES = {
   stats: { title: () => 'Analiz', sub: () => 'Nereye ne kadar harcadın?', render: renderStats },
   cards: { title: () => 'Kartlar', sub: () => 'Kredi kartı borçların', render: renderCards },
   car: { title: () => 'Hayal', sub: () => S.car.name || 'Hayalindeki araba', render: renderCar },
+  dev: { title: () => 'Gelişim', sub: () => 'Her gün biraz daha iyi', render: renderDev },
 };
 
 function render() {
   const pg = PAGES[ui.page];
+  document.body.dataset.page = ui.page;
   $('#main').innerHTML = pg.render();
   $('#title').textContent = pg.title();
   $('#subtitle').textContent = pg.sub();
@@ -614,9 +629,145 @@ function renderCar() {
     </section>`;
 }
 
+/* ---------------- Kişisel gelişim ----------------
+   Hafta = Pazartesi–Pazar. Haftalık hedefi (İngilizce 5, Gym 3) tutturan her hafta
+   streak'i 1 artırır; hedefin altında kalan bir hafta streak'i sıfırlar.
+   Başlangıç haftası eksik günlerle başladıysa hedef o haftaya göre küçültülür. */
+const weekStart = d => addDays(d, -dowIdx(d));
+
+function weekCount(h, ws) {
+  let c = 0;
+  for (let i = 0; i < 7; i++) if (h.log[addDays(ws, i)] === 1) c++;
+  return c;
+}
+
+function weekTarget(h, ws) {
+  const we = addDays(ws, 6);
+  if (h.start > we) return null;                       // takip başlamadan önceki hafta
+  if (h.start > ws) return Math.min(h.target, diffDays(h.start, we) + 1);
+  return h.target;
+}
+
+function habitStats(h) {
+  const t = todayStr(), cw = weekStart(t);
+  const cur = weekCount(h, cw);
+  const curT = weekTarget(h, cw) ?? h.target;
+  const curMet = cur >= curT;
+  let possible = cur;                                   // bu hafta ulaşılabilecek en yüksek sayı
+  for (let d = t; d <= addDays(cw, 6); d = addDays(d, 1)) if (h.log[d] !== 1) possible++;
+
+  let done = 0;                                         // biten haftalardan üst üste tutturulanlar
+  for (let ws = addDays(cw, -7); ; ws = addDays(ws, -7)) {
+    const tg = weekTarget(h, ws);
+    if (tg === null || weekCount(h, ws) < tg) break;
+    done++;
+  }
+
+  let best = 0, run = 0;
+  for (let ws = weekStart(h.start); ws <= cw; ws = addDays(ws, 7)) {
+    if (weekCount(h, ws) >= weekTarget(h, ws)) best = Math.max(best, ++run);
+    else if (ws < cw) run = 0;
+  }
+
+  let dayStreak = 0;
+  for (let d = h.log[t] === 1 ? t : addDays(t, -1); h.log[d] === 1; d = addDays(d, -1)) dayStreak++;
+
+  return {
+    cur, curT, curMet, best, dayStreak,
+    streak: done + (curMet ? 1 : 0),
+    lost: !curMet && possible < curT,
+    needed: Math.max(0, curT - cur),
+    daysLeft: 7 - dowIdx(t),
+    total: Object.values(h.log).filter(v => v === 1).length,
+  };
+}
+
+function renderDev() {
+  return S.habits.map(habitCard).join('') +
+    `<p class="foot">Bir güne dokunarak işaretle: boş → ✓ yaptım → ✕ yapmadım → boş</p>`;
+}
+
+function habitCard(h) {
+  const s = habitStats(h);
+  const t = todayStr(), cw = weekStart(t);
+  const v = h.log[t];
+
+  let week = '';
+  for (let i = 0; i < 7; i++) {
+    const d = addDays(cw, i), val = h.log[d], fut = d > t;
+    week += `<button class="hd ${val === 1 ? 'done' : val === 0 ? 'miss' : ''} ${d === t ? 'today' : ''}" ${fut ? 'disabled' : ''} data-act="habitCycle" data-h="${h.id}" data-d="${d}">
+      <small>${DOW_S[i]}</small><span>${val === 1 ? '✓' : val === 0 ? '✕' : parseD(d).getDate()}</span></button>`;
+  }
+
+  // son 12 hafta: üstte haftalık hedef çizgisi, altında 7 gün
+  let grid = '';
+  for (let w = 11; w >= 0; w--) {
+    const ws = addDays(cw, -7 * w);
+    const tg = weekTarget(h, ws), cnt = weekCount(h, ws);
+    const mk = tg === null ? '' : cnt >= tg ? 'met' : ws < cw ? 'fail' : 'now';
+    grid += `<i class="wk ${mk}"></i>`;
+    for (let i = 0; i < 7; i++) {
+      const d = addDays(ws, i), val = h.log[d];
+      grid += d > t ? '<i class="hc fut"></i>'
+        : `<button class="hc ${val === 1 ? 'done' : val === 0 ? 'miss' : ''}" data-act="habitCycle" data-h="${h.id}" data-d="${d}" aria-label="${fmtDate(d)}"></button>`;
+    }
+  }
+
+  const msg = s.curMet
+    ? `Haftalık hedef tamam! Streak devam ediyor 🔥${s.cur > s.curT ? ` (+${s.cur - s.curT} fazladan)` : ''}`
+    : s.lost
+      ? 'Bu hafta hedefe artık yetişemezsin — hafta bitince streak sıfırlanacak.'
+      : `Hedef için <b>${s.needed} gün</b> daha lazım · haftanın bitmesine ${s.daysLeft} gün var`;
+
+  return `<section class="card habit" style="--hc:${h.color}">
+    <div class="habit-head">
+      <span class="ico" style="background:${h.color}22">${h.emoji}</span>
+      <div class="row-main"><b>${esc(h.name)}</b><small>${esc(h.desc)} · haftada ${h.target} gün</small></div>
+      <div class="streak ${s.streak ? 'on' : ''} ${s.lost ? 'risk' : ''}"><span>🔥</span><b>${s.streak}</b><small>hafta</small></div>
+    </div>
+    <div class="today-btns">
+      <button class="btn ${v === 1 ? 'yes' : ''}" data-act="habitSet" data-h="${h.id}" data-v="1">✓ Bugün yaptım</button>
+      <button class="btn ${v === 0 ? 'no' : ''}" data-act="habitSet" data-h="${h.id}" data-v="0">✕ Yapmadım</button>
+    </div>
+    <div class="hweek">${week}</div>
+    <div class="hprog"><div class="progress"><i style="width:${Math.min(100, (s.cur / s.curT) * 100)}%"></i></div><b>${s.cur}/${s.curT}</b></div>
+    <p class="hmsg ${s.curMet ? 'good' : s.lost ? 'bad' : ''}">${msg}</p>
+    <div class="hgrid">${grid}</div>
+    <div class="hstats">
+      <div><span>Rekor</span><b>${s.best} hafta</b></div>
+      <div><span>Üst üste</span><b>${s.dayStreak} gün</b></div>
+      <div><span>Toplam</span><b>${s.total} gün</b></div>
+    </div>
+  </section>`;
+}
+
+function setHabit(id, d, val) {
+  const h = S.habits.find(x => x.id === id);
+  if (!h || d > todayStr()) return;
+  if (val === undefined) delete h.log[d]; else h.log[d] = val;
+  if (val !== undefined && d < h.start) h.start = d;
+  save(); render();
+  if (val === 1) {
+    vibrate();
+    const s = habitStats(h);
+    toast(s.curMet ? `${h.emoji} ${h.name}: bu hafta ${s.cur}/${s.curT} — streak ${s.streak} hafta 🔥` : `${h.emoji} ${h.name}: bu hafta ${s.cur}/${s.curT}`);
+  }
+}
+
 /* =========================================================
    Alt sayfa (sheet)
    ========================================================= */
+// iPhone'da klavye açılınca görünür alan küçülür; modalı görünür alana sığdır ki klavye üstünü örtmesin
+const VV = window.visualViewport;
+function fitSheet() {
+  const root = $('#sheet');
+  if (!VV || !root.classList.contains('open')) return;
+  root.style.top = VV.offsetTop + 'px';
+  root.style.height = VV.height + 'px';
+  root.classList.toggle('kb', window.innerHeight - VV.height > 120);
+}
+if (VV) { VV.addEventListener('resize', fitSheet); VV.addEventListener('scroll', fitSheet); }
+
 function openSheet(html, mount) {
   const root = $('#sheet');
   root.querySelector('.sheet-body').innerHTML = html;
@@ -624,11 +775,13 @@ function openSheet(html, mount) {
   root.classList.add('open');
   root.setAttribute('aria-hidden', 'false');
   document.body.classList.add('noscroll');
+  fitSheet();
   if (mount) mount(root.querySelector('.sheet-body'));
 }
 function closeSheet() {
   const root = $('#sheet');
-  root.classList.remove('open');
+  root.classList.remove('open', 'kb');
+  root.style.top = root.style.height = '';
   root.setAttribute('aria-hidden', 'true');
   document.body.classList.remove('noscroll');
   if (document.activeElement) document.activeElement.blur();
@@ -645,7 +798,7 @@ function openExpense(opts = {}) {
   openSheet(`${head(e ? 'Harcamayı düzenle' : 'Harcama ekle')}
     <form id="expForm" autocomplete="off" novalidate>
       <label class="amount"><span>₺</span><input id="amt" inputmode="decimal" placeholder="0" value="${amountStr(e?.amount)}"></label>
-      <div class="chips" id="chips">${allCats().map(c => `<button type="button" class="chip ${sel === c.id ? 'on' : ''}" data-cat="${c.id}"><span>${c.emoji}</span>${esc(c.name)}</button>`).join('')}</div>
+      <div class="chips scroll" id="chips">${allCats().map(c => `<button type="button" class="chip ${sel === c.id ? 'on' : ''}" data-cat="${c.id}"><span>${c.emoji}</span>${esc(c.name)}</button>`).join('')}</div>
       <input class="field" id="note" placeholder="Not ya da yeni kategori (ör. Netflix)" value="${esc(e?.note || '')}" enterkeyhint="done">
       <p class="hint" id="hint"></p>
       <div class="form-row">
@@ -1026,8 +1179,7 @@ function importData(file) {
       if (!Array.isArray(data.expenses) || !Array.isArray(data.periods)) throw new Error('format');
       if (!confirm('Mevcut veriler yedektekilerle değiştirilecek. Devam edilsin mi?')) return;
       const { carImage, ...rest } = data;
-      S = Object.assign(defaultState(), rest);
-      S.car = Object.assign(defaultState().car, S.car || {});
+      S = normalize(rest);
       if (carImage) localStorage.setItem(IMG_KEY, carImage); else localStorage.removeItem(IMG_KEY);
       save(); closeSheet(); render();
       toast('Yedek yüklendi');
@@ -1079,6 +1231,14 @@ const ACT = {
   deposit: () => openDeposit(),
   depEdit: el => openDeposit(el.dataset.id),
   carValue: () => openCarValue(),
+  habitSet: el => {
+    const h = S.habits.find(x => x.id === el.dataset.h), t = todayStr(), v = Number(el.dataset.v);
+    if (h) setHabit(h.id, t, h.log[t] === v ? undefined : v);
+  },
+  habitCycle: el => {
+    const h = S.habits.find(x => x.id === el.dataset.h), d = el.dataset.d;
+    if (h) setHabit(h.id, d, h.log[d] === undefined ? 1 : h.log[d] === 1 ? 0 : undefined);
+  },
   export: () => exportData(),
   reset: () => {
     if (!confirm('Tüm veriler kalıcı olarak silinecek. Emin misin?')) return;
@@ -1126,6 +1286,12 @@ render();
 if (new URLSearchParams(location.search).get('add') === '1') openExpense();
 if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
 if ('serviceWorker' in navigator && location.protocol !== 'file:') {
+  const hadController = !!navigator.serviceWorker.controller;
+  let reloaded = false;
+  // Yeni sürüm yüklendiğinde sayfayı bir kez yenile → güncellemeler hemen görünür
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (hadController && !reloaded && !$('#sheet').classList.contains('open')) { reloaded = true; location.reload(); }
+  });
   window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));
 }
 })();
