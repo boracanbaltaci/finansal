@@ -85,7 +85,7 @@ h1, h2, h3, p { margin: 0; }
 .icon-btn.round { width: 40px; height: 40px; border-radius: 50%; background: var(--surface); border: 1px solid var(--border); }
 .icon-btn svg, .nav svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 
-main { padding: 4px 16px 0; display: grid; gap: 14px; max-width: 560px; margin: 0 auto; }
+main { padding: 4px 16px 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; max-width: 560px; margin: 0 auto; }
 
 /* ---------- Cards ---------- */
 .card {
@@ -442,7 +442,8 @@ body[data-page="dev"] .fab { display: none; }
 .settings-group h4 { margin: 4px 2px 0; font-size: 12.5px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
 
 /* ---------- Kişisel gelişim ---------- */
-.habit { display: grid; gap: 14px; }
+.habit { display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; }
+.habit-head .row-main small { white-space: normal; }
 .habit-head { display: flex; align-items: center; gap: 12px; }
 .habit-head .ico { width: 46px; height: 46px; font-size: 23px; border-radius: 15px; }
 .habit-head .row-main b { font-size: 17px; }
@@ -461,7 +462,7 @@ body[data-page="dev"] .fab { display: none; }
 .today-btns { display: grid; grid-template-columns: 1.3fr 1fr; gap: 10px; }
 .today-btns .btn.yes { background: var(--hc); color: #fff; box-shadow: 0 8px 18px -8px var(--hc); }
 .today-btns .btn.no { background: var(--bad-soft); color: var(--bad); }
-.hweek { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; }
+.hweek { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 6px; }
 .hd {
   display: flex; flex-direction: column; align-items: center; gap: 4px;
   padding: 7px 0 8px; border-radius: 14px; background: var(--surface-2);
@@ -483,7 +484,7 @@ body[data-page="dev"] .fab { display: none; }
 .hmsg.bad { color: var(--bad); font-weight: 600; }
 .hgrid {
   display: grid; grid-template-rows: 5px repeat(7, 1fr); grid-auto-flow: column;
-  grid-auto-columns: 1fr; gap: 4px;
+  grid-auto-columns: minmax(0, 1fr); gap: 4px;
 }
 .hgrid .wk { border-radius: 9px; background: var(--surface-2); }
 .hgrid .wk.met { background: var(--hc); }
@@ -492,7 +493,8 @@ body[data-page="dev"] .fab { display: none; }
 .hgrid .hc.done { background: var(--hc); }
 .hgrid .hc.miss { background: var(--bad-soft); }
 .hgrid .hc.fut { background: transparent; }
-.hstats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.hgrid .hc.pre { opacity: .35; }
+.hstats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
 .hstats div { background: var(--surface-2); border-radius: 14px; padding: 9px 10px; }
 .hstats span { display: block; font-size: 11.5px; color: var(--muted); font-weight: 500; }
 .hstats b { font-size: 15px; }

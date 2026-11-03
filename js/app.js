@@ -709,7 +709,7 @@ function habitCard(h) {
     for (let i = 0; i < 7; i++) {
       const d = addDays(ws, i), val = h.log[d];
       grid += d > t ? '<i class="hc fut"></i>'
-        : `<button class="hc ${val === 1 ? 'done' : val === 0 ? 'miss' : ''}" data-act="habitCycle" data-h="${h.id}" data-d="${d}" aria-label="${fmtDate(d)}"></button>`;
+        : `<button class="hc ${val === 1 ? 'done' : val === 0 ? 'miss' : d < h.start ? 'pre' : ''}" data-act="habitCycle" data-h="${h.id}" data-d="${d}" aria-label="${fmtDate(d)}"></button>`;
     }
   }
 
