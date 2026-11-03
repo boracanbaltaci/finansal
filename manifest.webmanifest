@@ -1,0 +1,19 @@
+{
+  "name": "Finansal",
+  "short_name": "Finansal",
+  "description": "Günlük harcama limiti, kart borçları ve hayal araba takibi",
+  "lang": "tr",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0b0d10",
+  "theme_color": "#0b0d10",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ],
+  "shortcuts": [
+    { "name": "Harcama ekle", "short_name": "Ekle", "url": "./?add=1", "icons": [{ "src": "icons/icon-192.png", "sizes": "192x192" }] }
+  ]
+}
