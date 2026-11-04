@@ -97,25 +97,42 @@ const defaultState = () => ({
   habits: DEFAULT_HABITS(), // {id, name, desc, emoji, color, target, start, log:{'YYYY-MM-DD': 1 (yaptım) | 0 (yapmadım)}}
 });
 
-// Kişisel gelişim alışkanlıkları: haftalık hedef (target) tutturulursa haftalık streak devam eder
+// Kişisel gelişim alışkanlıkları
+//  mode 'weekly': haftalık hedef (target) tutturulursa haftalık streak devam eder (Gym)
+//  mode 'daily' : her gün yapılmalı; bir gün boş kalırsa streak bozulur, her `every` günde ödül, `goal` gün hedef (İngilizce)
+const ENGLISH_DAILY = { mode: 'daily', goal: 100, every: 20, desc: 'Her gün 1 okuma parçası' };
 function DEFAULT_HABITS() {
   return [
-    { id: 'english', name: 'İngilizce', desc: 'Okuma yap ya da yeni bir şey öğren', emoji: '📚', color: '#3b82f6', target: 5, start: todayStr(), log: {} },
-    { id: 'gym', name: 'Gym', desc: 'Antrenman', emoji: '🏋️', color: '#f97316', target: 3, start: todayStr(), log: {} },
+    { id: 'english', name: 'İngilizce', emoji: '📚', color: '#3b82f6', start: todayStr(), log: {}, rewards: {}, claimed: {}, ...ENGLISH_DAILY },
+    { id: 'gym', name: 'Gym', desc: 'Antrenman', emoji: '🏋️', color: '#f97316', mode: 'weekly', target: 3, start: todayStr(), log: {} },
   ];
 }
 
+// Eksik alanları tamamlar; mevcut verilere (log vb.) asla dokunmaz
 function normalize(raw) {
   const st = Object.assign(defaultState(), raw || {});
   st.car = Object.assign(defaultState().car, st.car || {});
   if (!Array.isArray(st.habits)) st.habits = [];
   for (const h of DEFAULT_HABITS()) if (!st.habits.some(x => x.id === h.id)) st.habits.push(h);
+  for (const h of st.habits) {
+    h.log = h.log || {};
+    if (h.id === 'english' && h.mode !== 'daily') Object.assign(h, ENGLISH_DAILY); // haftalık → günlük streak geçişi
+    if (!h.mode) h.mode = 'weekly';
+    if (h.mode === 'daily') { h.rewards = h.rewards || {}; h.claimed = h.claimed || {}; }
+  }
   return st;
 }
 
 function load() {
-  try { return normalize(JSON.parse(localStorage.getItem(KEY))); }
-  catch { return defaultState(); }
+  try {
+    const rawStr = localStorage.getItem(KEY);
+    const raw = JSON.parse(rawStr);
+    // Günlük streak geçişinden önce eski verinin bir kopyasını sakla (güvenlik için)
+    if (raw && Array.isArray(raw.habits) && raw.habits.some(h => h.id === 'english' && h.mode !== 'daily')) {
+      try { localStorage.setItem(KEY + '.yedek-gecis', rawStr); } catch { /* yer yoksa geç */ }
+    }
+    return normalize(raw);
+  } catch { return defaultState(); }
 }
 
 let S = load();
@@ -683,7 +700,7 @@ function habitStats(h) {
 }
 
 function renderDev() {
-  return S.habits.map(habitCard).join('') +
+  return S.habits.map(h => (h.mode === 'daily' ? dailyCard(h) : habitCard(h))).join('') +
     `<p class="foot">Bir güne dokunarak işaretle: boş → ✓ yaptım → ✕ yapmadım → boş</p>`;
 }
 
@@ -741,13 +758,162 @@ function habitCard(h) {
   </section>`;
 }
 
+/* ---------- Günlük streak (İngilizce) ---------- */
+// Ardışık "yaptım" günlerini bloklara ayırır: [{start, end, len}]
+function habitRuns(h) {
+  const days = Object.keys(h.log).filter(d => h.log[d] === 1).sort();
+  const out = [];
+  let cur = null;
+  for (const d of days) {
+    if (cur && addDays(cur.end, 1) === d) { cur.end = d; cur.len++; }
+    else { cur = { start: d, end: d, len: 1 }; out.push(cur); }
+  }
+  return out;
+}
+
+function dailyStats(h) {
+  const t = todayStr(), y = addDays(t, -1);
+  const every = h.every || 20, goal = h.goal || 100;
+  const runs = habitRuns(h), last = runs.at(-1);
+  // Streak bugün ya da dün bitiyorsa sürüyor (bugün henüz işaretlenmediyse dünkü seri korunur)
+  const run = h.log[t] !== 0 && last && (last.end === t || last.end === y) ? last : null;
+  const streak = run ? run.len : 0;
+  const earned = [];
+  for (const r of runs) for (let m = every; m <= r.len; m += every) earned.push({ key: `${r.start}:${m}`, m, date: addDays(r.start, m - 1), current: r === run });
+  const nextM = (Math.floor(streak / every) + 1) * every;
+  return {
+    streak, run, every, goal, earned, nextM,
+    toNext: nextM - streak,
+    doneToday: h.log[t] === 1,
+    broken: !streak && runs.length > 0,
+    best: runs.reduce((a, r) => Math.max(a, r.len), 0),
+    total: runs.reduce((a, r) => a + r.len, 0),
+  };
+}
+
+function dailyCard(h) {
+  const s = dailyStats(h);
+  const t = todayStr(), v = h.log[t];
+
+  // son 7 gün (bugün en sağda)
+  let week = '';
+  for (let i = 6; i >= 0; i--) {
+    const d = addDays(t, -i), val = h.log[d];
+    week += `<button class="hd ${val === 1 ? 'done' : val === 0 ? 'miss' : ''} ${d === t ? 'today' : ''}" data-act="habitCycle" data-h="${h.id}" data-d="${d}">
+      <small>${d === t ? 'Bugün' : DOW_S[dowIdx(d)]}</small><span>${val === 1 ? '✓' : val === 0 ? '✕' : parseD(d).getDate()}</span></button>`;
+  }
+
+  // ödül basamakları: 20, 40, 60, 80, 100 (100 geçilince sonrakiler de eklenir)
+  const ms = [];
+  for (let m = s.every; m <= Math.max(s.goal, s.nextM); m += s.every) ms.push(m);
+  const msHtml = ms.map(m => {
+    const unlocked = s.streak >= m;
+    const key = s.run ? `${s.run.start}:${m}` : '';
+    const claimed = unlocked && h.claimed[key];
+    const state = claimed ? 'claimed' : unlocked ? 'open' : 'locked';
+    const act = claimed ? 'rewardUnclaim' : unlocked ? 'rewardClaim' : 'rewards';
+    return `<button class="ms ${state}" data-act="${act}" data-h="${h.id}" data-key="${key}" data-m="${m}">
+      <span class="ms-ico">${claimed ? '✅' : unlocked ? '🎁' : '🔒'}</span>
+      <b>${m}. gün</b><small>${esc(h.rewards[m] || 'Ödül belirle')}</small>
+      <em>${claimed ? 'Alındı' : unlocked ? 'Al!' : `${m - s.streak} gün`}</em></button>`;
+  }).join('');
+
+  // önceki serilerden kazanılıp henüz alınmamış ödüller
+  const pending = s.earned.filter(e => !e.current && !h.claimed[e.key]);
+
+  let msg, cls = '';
+  if (v === 0) { msg = 'Bugün "yapmadım" işaretli — streak bozuldu. Okursan işareti değiştir, seri geri gelir.'; cls = 'bad'; }
+  else if (s.doneToday) {
+    cls = 'good';
+    msg = s.streak >= s.goal ? `Bugün tamam! 🏆 ${s.goal} gün hedefini geçtin, devam!` : `Bugün tamam! 🔥 Sonraki ödüle <b>${s.toNext} gün</b>.`;
+  } else if (s.streak > 0) {
+    msg = s.toNext === 1 ? `Bugünkü okumayı yaparsan <b>${s.nextM}. gün ödülünü</b> kazanırsın! 🎁`
+      : `Bugünkü okumanı yap, ${s.streak} günlük serini koru! Ödüle ${s.toNext - 1} gün kalır.`;
+  } else if (s.broken) { msg = 'Seri bozuldu — bugün okuyup yeniden başla 💪'; cls = 'bad'; }
+  else msg = `İlk okuma parçanı yap, ${s.goal} günlük yolculuk başlasın!`;
+
+  // son 12 hafta takvimi
+  const cw = weekStart(t);
+  let grid = '';
+  for (let w = 11; w >= 0; w--) {
+    const ws = addDays(cw, -7 * w);
+    for (let i = 0; i < 7; i++) {
+      const d = addDays(ws, i), val = h.log[d];
+      grid += d > t ? '<i class="hc fut"></i>'
+        : `<button class="hc ${val === 1 ? 'done' : val === 0 ? 'miss' : d < h.start ? 'pre' : ''}" data-act="habitCycle" data-h="${h.id}" data-d="${d}" aria-label="${fmtDate(d)}"></button>`;
+    }
+  }
+
+  const pct = Math.min(100, (s.streak / s.goal) * 100);
+  return `<section class="card habit" style="--hc:${h.color}">
+    <div class="habit-head">
+      <span class="ico" style="background:${h.color}22">${h.emoji}</span>
+      <div class="row-main"><b>${esc(h.name)}</b><small>${esc(h.desc)} · ${s.goal} gün hedefi</small></div>
+      <div class="streak ${s.streak ? 'on' : ''}"><span>🔥</span><b>${s.streak}</b><small>gün</small></div>
+    </div>
+    <div class="today-btns">
+      <button class="btn ${v === 1 ? 'yes' : ''}" data-act="habitSet" data-h="${h.id}" data-v="1">✓ Bugün okudum</button>
+      <button class="btn ${v === 0 ? 'no' : ''}" data-act="habitSet" data-h="${h.id}" data-v="0">✕ Yapmadım</button>
+    </div>
+    <div class="hweek">${week}</div>
+    <div class="goal">
+      <div class="goal-top"><span>${s.goal} gün hedefi</span><b>${s.streak} / ${s.goal}</b></div>
+      <div class="goal-bar"><i class="fill" style="width:${pct}%"></i>
+        ${ms.filter(m => m < s.goal).map(m => `<span class="tick ${s.streak >= m ? 'on' : ''}" style="left:${(m / s.goal) * 100}%">🎁</span>`).join('')}
+        <span class="tick end ${s.streak >= s.goal ? 'on' : ''}" style="left:100%">🏆</span>
+      </div>
+    </div>
+    <p class="hmsg ${cls}">${msg}</p>
+    <div>
+      <div class="ms-head"><span>Ödüller · her ${s.every} günde bir</span><button data-act="rewards" data-h="${h.id}">Ödülleri düzenle</button></div>
+      <div class="ms-list">${msHtml}</div>
+    </div>
+    ${pending.length ? `<div class="info-box">🎁 Önceki serilerden alınmamış ödül: ${pending.map(e => `<button class="link" data-act="rewardClaim" data-h="${h.id}" data-key="${e.key}" data-m="${e.m}"><b>${e.m}. gün${h.rewards[e.m] ? ' – ' + esc(h.rewards[e.m]) : ''}</b> (al)</button>`).join(', ')}</div>` : ''}
+    <div class="hgrid nowk">${grid}</div>
+    <div class="hstats">
+      <div><span>Rekor seri</span><b>${s.best} gün</b></div>
+      <div><span>Toplam okuma</span><b>${s.total} gün</b></div>
+      <div><span>Ödüller</span><b>${Object.keys(h.claimed).length} / ${s.earned.length}</b></div>
+    </div>
+  </section>`;
+}
+
+function openRewards(id) {
+  const h = S.habits.find(x => x.id === id);
+  if (!h) return;
+  const ms = [];
+  for (let m = h.every; m <= h.goal; m += h.every) ms.push(m);
+  const ideas = ['ör. Sevdiğin bir yemek', 'ör. Yeni kitap', 'ör. Kulaklık', 'ör. Konser bileti', 'ör. Büyük ödül 🏆'];
+  openSheet(`${head('Ödüllerin')}
+    <form id="rwForm" novalidate>
+      <p class="muted" style="font-size:14px">Seri her ${h.every} güne ulaştığında kendine alacağın şeyi yaz. Seri bozulursa ödüller yeniden kazanılmalı.</p>
+      ${ms.map((m, i) => `<label class="label">🎁 ${m}. gün<input class="field" data-m="${m}" placeholder="${ideas[i] || 'Ödül'}" value="${esc(h.rewards[m] || '')}"></label>`).join('')}
+      <button class="btn primary block big" type="submit">Kaydet</button>
+    </form>`, body => {
+    $('#rwForm', body).addEventListener('submit', ev => {
+      ev.preventDefault();
+      body.querySelectorAll('[data-m]').forEach(inp => {
+        const v = inp.value.trim();
+        if (v) h.rewards[inp.dataset.m] = v; else delete h.rewards[inp.dataset.m];
+      });
+      save(); closeSheet(); render();
+      toast('Ödüller kaydedildi 🎁');
+    });
+  });
+}
+
 function setHabit(id, d, val) {
   const h = S.habits.find(x => x.id === id);
   if (!h || d > todayStr()) return;
   if (val === undefined) delete h.log[d]; else h.log[d] = val;
   if (val !== undefined && d < h.start) h.start = d;
   save(); render();
-  if (val === 1) {
+  if (val === 1 && h.mode === 'daily') {
+    vibrate();
+    const s = dailyStats(h);
+    if (s.streak && s.streak % s.every === 0) toast(`🎉 ${s.streak} gün! Ödülünü hak ettin: ${h.rewards[s.streak] || 'kendine bir şey al'} 🎁`);
+    else toast(`📚 Seri ${s.streak} gün 🔥 · ödüle ${s.toNext} gün`);
+  } else if (val === 1) {
     vibrate();
     const s = habitStats(h);
     toast(s.curMet ? `${h.emoji} ${h.name}: bu hafta ${s.cur}/${s.curT} — streak ${s.streak} hafta 🔥` : `${h.emoji} ${h.name}: bu hafta ${s.cur}/${s.curT}`);
@@ -1234,6 +1400,20 @@ const ACT = {
   habitSet: el => {
     const h = S.habits.find(x => x.id === el.dataset.h), t = todayStr(), v = Number(el.dataset.v);
     if (h) setHabit(h.id, t, h.log[t] === v ? undefined : v);
+  },
+  rewards: el => openRewards(el.dataset.h),
+  rewardClaim: el => {
+    const h = S.habits.find(x => x.id === el.dataset.h);
+    if (!h || !el.dataset.key) return;
+    h.claimed[el.dataset.key] = Date.now();
+    save(); render(); vibrate();
+    toast(`🎁 Afiyet olsun! ${h.rewards[el.dataset.m] || 'Ödülünü'} hak ettin.`);
+  },
+  rewardUnclaim: el => {
+    const h = S.habits.find(x => x.id === el.dataset.h);
+    if (!h || !confirm('Bu ödül "alınmadı" olarak geri işaretlensin mi?')) return;
+    delete h.claimed[el.dataset.key];
+    save(); render();
   },
   habitCycle: el => {
     const h = S.habits.find(x => x.id === el.dataset.h), d = el.dataset.d;

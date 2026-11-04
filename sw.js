@@ -1,6 +1,6 @@
 // Uygulama dosyalarını önbelleğe alır → internet olmadan da açılır.
 // Dosyaları güncelleyince VERSION'u artır.
-const VERSION = 'finansal-v3';
+const VERSION = 'finansal-v4';
 const ASSETS = [
   './',
   './index.html',

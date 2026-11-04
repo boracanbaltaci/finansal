@@ -498,3 +498,38 @@ body[data-page="dev"] .fab { display: none; }
 .hstats div { background: var(--surface-2); border-radius: 14px; padding: 9px 10px; }
 .hstats span { display: block; font-size: 11.5px; color: var(--muted); font-weight: 500; }
 .hstats b { font-size: 15px; }
+
+/* ---------- Günlük streak + ödüller ---------- */
+.hgrid.nowk { grid-template-rows: repeat(7, auto); }
+.goal { display: grid; gap: 10px; }
+.goal-top { display: flex; justify-content: space-between; align-items: baseline; font-size: 13px; color: var(--muted); font-weight: 600; }
+.goal-top b { color: var(--text); font-size: 16px; }
+.goal-bar { position: relative; height: 12px; border-radius: 99px; background: var(--surface-2); margin: 4px 11px 6px; }
+.goal-bar .fill { position: absolute; left: 0; top: 0; bottom: 0; border-radius: inherit; background: linear-gradient(90deg, var(--hc), #8b5cf6); transition: width .5s ease; }
+.goal-bar .tick {
+  position: absolute; top: 50%; transform: translate(-50%, -50%);
+  width: 24px; height: 24px; border-radius: 50%;
+  display: grid; place-items: center; font-size: 12px;
+  background: var(--surface); border: 2px solid var(--surface-2);
+  filter: grayscale(1); opacity: .75;
+}
+.goal-bar .tick.on { border-color: var(--hc); filter: none; opacity: 1; }
+.ms-head { display: flex; justify-content: space-between; align-items: center; font-size: 12.5px; color: var(--muted); font-weight: 600; margin-bottom: 8px; }
+.ms-head button { color: var(--accent); font-weight: 650; }
+.ms-list { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 6px; }
+.ms {
+  display: flex; flex-direction: column; align-items: center; gap: 2px; min-width: 0;
+  padding: 10px 4px 8px; border-radius: 14px; background: var(--surface-2); text-align: center;
+}
+.ms .ms-ico { font-size: 20px; line-height: 1.2; }
+.ms b { font-size: 11.5px; white-space: nowrap; letter-spacing: -0.01em; }
+.ms small { width: 100%; font-size: 10.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ms em { font-style: normal; font-size: 10.5px; font-weight: 700; color: var(--muted); }
+.ms.locked .ms-ico { filter: grayscale(1); opacity: .7; }
+.ms.open { background: linear-gradient(160deg, rgba(251, 191, 36, .25), rgba(249, 115, 22, .16)); box-shadow: inset 0 0 0 2px #f59e0b; }
+.ms.open .ms-ico { animation: pop 1.4s ease-in-out infinite; }
+.ms.open em { color: #d97706; }
+.ms.claimed em { color: var(--good); }
+@keyframes pop { 0%, 100% { transform: rotate(0) scale(1); } 25% { transform: rotate(-12deg) scale(1.15); } 50% { transform: rotate(10deg) scale(1.15); } 75% { transform: rotate(0) scale(1); } }
+.link { color: var(--accent); text-align: left; }
+.hd small { white-space: nowrap; }
