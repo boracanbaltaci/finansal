@@ -31,6 +31,7 @@ const fmtTime = ts => { const d = new Date(ts); return `${pad(d.getHours())}:${p
 
 const nf0 = new Intl.NumberFormat('tr-TR', { maximumFractionDigits: 0 });
 const nfc = new Intl.NumberFormat('tr-TR', { notation: 'compact', maximumFractionDigits: 1 });
+const nf1 = new Intl.NumberFormat('tr-TR', { maximumFractionDigits: 1 });
 const sign = v => (v < 0 ? '−' : '');
 const money = v => sign(Math.round(v)) + '₺' + nf0.format(Math.abs(v));      // yuvarlanmış
 const nf2f = new Intl.NumberFormat('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -95,7 +96,21 @@ const defaultState = () => ({
   cards: [],        // {id, name, debt, limit, dueDay, color, log:[{ts, delta, note}]}
   car: { name: '', price: 0, deposits: [], mark: null }, // deposits:{id, amount, date, note, ts}  mark:{value, ts}
   habits: DEFAULT_HABITS(), // {id, name, desc, emoji, color, target, start, log:{'YYYY-MM-DD': 1 (yaptım) | 0 (yapmadım)}}
+  nutrition: DEFAULT_NUTRITION(), // {items:[{id, name, emoji}], log:{'YYYY-MM-DD': {itemId: 1 (iyi) | 0 (kötü)}}}
+  program: null,            // 6 aylık dönem: {start, months, name}
 });
+
+function DEFAULT_NUTRITION() {
+  return {
+    items: [
+      { id: 'temiz', name: 'Temiz besin', emoji: '🥗' },
+      { id: 'su', name: 'Bol su', emoji: '💧' },
+      { id: 'supp', name: 'Supplementler', emoji: '💪' },
+      { id: 'vit', name: 'Vitaminler', emoji: '💊' },
+    ],
+    log: {},
+  };
+}
 
 // Kişisel gelişim alışkanlıkları
 //  mode 'weekly': haftalık hedef (target) tutturulursa haftalık streak devam eder (Gym)
@@ -120,6 +135,8 @@ function normalize(raw) {
     if (!h.mode) h.mode = 'weekly';
     if (h.mode === 'daily') { h.rewards = h.rewards || {}; h.claimed = h.claimed || {}; }
   }
+  if (!st.nutrition || !Array.isArray(st.nutrition.items)) st.nutrition = DEFAULT_NUTRITION();
+  st.nutrition.log = st.nutrition.log || {};
   return st;
 }
 
@@ -233,14 +250,19 @@ const ui = {
   hm: { y: now0.getFullYear(), m: now0.getMonth() },
   an: { mode: 'week', off: 0 },
   showAll: false,
+  devTab: 'today',          // Gelişim: today | english | gym | food
+  walletTab: 'cards',       // Cüzdan: cards | car
+  progMonth: null,          // 6 Ay: seçili ay (0-5)
+  nm: { y: now0.getFullYear(), m: now0.getMonth() }, // Beslenme takvimi ayı
+  sheetDay: null,           // açık gün detayı (işaretleme sonrası yenilemek için)
 };
 
 const PAGES = {
   home: { title: () => 'Bütçe', sub: () => { const t = todayStr(); return `${fmtDate(t)} ${DOW[dowIdx(t)]}`; }, render: renderHome },
   stats: { title: () => 'Analiz', sub: () => 'Nereye ne kadar harcadın?', render: renderStats },
-  cards: { title: () => 'Kartlar', sub: () => 'Kredi kartı borçların', render: renderCards },
-  car: { title: () => 'Hayal', sub: () => S.car.name || 'Hayalindeki araba', render: renderCar },
+  program: { title: () => '6 Ay', sub: () => S.program ? S.program.name : 'Dönemini başlat', render: renderProgram },
   dev: { title: () => 'Gelişim', sub: () => 'Her gün biraz daha iyi', render: renderDev },
+  wallet: { title: () => 'Cüzdan', sub: () => (ui.walletTab === 'car' ? S.car.name || 'Hayalindeki araba' : 'Kredi kartı borçların'), render: renderWallet },
 };
 
 function render() {
@@ -699,9 +721,406 @@ function habitStats(h) {
   };
 }
 
+const seg = (act, cur, items) => `<div class="seg">${items.map(([k, l]) => `<button data-act="${act}" data-k="${k}" class="${cur === k ? 'on' : ''}">${l}</button>`).join('')}</div>`;
+
 function renderDev() {
-  return S.habits.map(h => (h.mode === 'daily' ? dailyCard(h) : habitCard(h))).join('') +
-    `<p class="foot">Bir güne dokunarak işaretle: boş → ✓ yaptım → ✕ yapmadım → boş</p>`;
+  const tab = ui.devTab;
+  let html = seg('devTab', tab, [['today', 'Bugün'], ['english', 'İngilizce'], ['gym', 'Gym'], ['food', 'Beslenme']]);
+  if (tab === 'today') html += todayCard();
+  else if (tab === 'food') html += nutritionCard();
+  else {
+    const h = S.habits.find(x => x.id === tab);
+    if (h) html += h.mode === 'daily' ? dailyCard(h) : habitCard(h);
+    html += `<p class="foot">Bir güne dokunarak işaretle: boş → ✓ yaptım → ✕ yapmadım → boş</p>`;
+  }
+  return html;
+}
+
+function renderWallet() {
+  return seg('walletTab', ui.walletTab, [['cards', '💳 Kartlar'], ['car', '🏎️ Hayal araba']]) +
+    (ui.walletTab === 'car' ? renderCar() : renderCards());
+}
+
+/* ---------------- Beslenme ve Diğer ---------------- */
+// Bir günün beslenme durumu: işaretlenen maddelerden kaçı iyi
+function nutriDay(d) {
+  const L = S.nutrition.log[d];
+  if (!L) return null;
+  let good = 0, total = 0;
+  for (const it of S.nutrition.items) {
+    const v = L[it.id];
+    if (v === 1 || v === 0) { total++; good += v; }
+  }
+  return total ? { good, total, score: good / total, full: good === S.nutrition.items.length } : null;
+}
+
+function setNutri(d, id, v) {
+  if (d > todayStr()) return;
+  const log = S.nutrition.log;
+  const L = log[d] || (log[d] = {});
+  if (v === undefined) delete L[id]; else L[id] = v;
+  if (!Object.keys(L).length) delete log[d];
+  save();
+}
+
+// Tüm maddelerin "iyi" olduğu ardışık gün sayısı (bugün henüz tam değilse dünden geriye sayar)
+function nutriStreak() {
+  const t = todayStr();
+  const full = d => { const n = nutriDay(d); return n && n.full; };
+  let c = 0;
+  for (let d = full(t) ? t : addDays(t, -1); full(d); d = addDays(d, -1)) c++;
+  return c;
+}
+
+function nutritionCard() {
+  const t = todayStr();
+  const { y, m } = ui.nm;
+  const a = toStr(new Date(y, m, 1)), b = monthEnd(a);
+  const lead = dowIdx(a);
+  let cells = '<div class="cell empty"></div>'.repeat(lead), full = 0, marked = 0;
+  const per = {};
+  for (let d = a; d <= b; d = addDays(d, 1)) {
+    const n = nutriDay(d);
+    let style = '', cls = 'cell';
+    if (d > t) cls += ' future';
+    else if (n) { const c = scoreColor(n.score); style = `background:${c.bg};color:${c.fg}`; marked++; if (n.full) full++; }
+    if (d === t) cls += ' today';
+    const L = S.nutrition.log[d] || {};
+    for (const it of S.nutrition.items) if (L[it.id] === 0 || L[it.id] === 1) { const p = per[it.id] || (per[it.id] = { g: 0, n: 0 }); p.n++; p.g += L[it.id]; }
+    cells += `<button class="${cls}" style="${style}" data-act="progDay" data-d="${d}"><span>${parseD(d).getDate()}</span>${n ? `<small>${n.good}/${n.total}</small>` : ''}</button>`;
+  }
+  const nd = nutriDay(t);
+  return `<section class="card habit" style="--hc:#10b981">
+    <div class="habit-head">
+      <span class="ico" style="background:#10b98122">🥗</span>
+      <div class="row-main"><b>Beslenme ve Diğer</b><small>Hepsini her gün tam almalısın</small></div>
+      <div class="streak ${nutriStreak() ? 'on' : ''}"><span>🔥</span><b>${nutriStreak()}</b><small>tam gün</small></div>
+    </div>
+    ${nutriRows(t)}
+    <p class="hmsg ${nd && nd.full ? 'good' : ''}">${nd ? (nd.full ? 'Bugün hepsi tamam! 💚' : `Bugün ${nd.good}/${S.nutrition.items.length} iyi`) : 'Bugünü henüz işaretlemedin.'}</p>
+  </section>
+  <section class="card">
+    <div class="card-head">
+      <button class="icon-btn" data-act="nmPrev" aria-label="Önceki ay">‹</button>
+      <h3>${MONTHS[m]} ${y}</h3>
+      <button class="icon-btn" data-act="nmNext" aria-label="Sonraki ay">›</button>
+    </div>
+    <div class="dow">${DOW_S.map(x => `<span>${x}</span>`).join('')}</div>
+    <div class="heat">${cells}</div>
+    <div class="legend"><span>Kötü</span><i class="lg-score"></i><span>İyi</span></div>
+    <div class="hm-sum"><span>💚 <b>${full}</b> tam gün</span><span>📝 <b>${marked}</b> gün işaretli</span></div>
+  </section>
+  <section class="card">
+    <div class="card-head"><h3>Bu ay maddeler</h3><button class="link" data-act="nutriItems">Maddeleri düzenle</button></div>
+    <div class="cat-list">${S.nutrition.items.map(it => {
+      const p = per[it.id] || { g: 0, n: 0 };
+      const pct = p.n ? (p.g / p.n) * 100 : 0;
+      return `<div class="cat-item"><span class="ico" style="background:#10b98122">${it.emoji}</span>
+        <div><div class="cat-top"><span>${esc(it.name)}</span><span>${p.n ? `%${nf0.format(pct)} <small>${p.g}/${p.n} gün</small>` : '<small>—</small>'}</span></div>
+        <div class="cat-bar"><i style="width:${pct}%;background:${scoreColor(p.n ? p.g / p.n : 0).bg}"></i></div></div></div>`;
+    }).join('')}</div>
+  </section>`;
+}
+
+// Beslenme maddeleri için İyi / Kötü satırları
+function nutriRows(d) {
+  const L = S.nutrition.log[d] || {};
+  return `<div class="ck">
+    ${S.nutrition.items.map(it => ynRow(`${it.emoji} ${esc(it.name)}`, L[it.id], 'nutri', it.id, d, 'İyi', 'Kötü')).join('')}
+    <button class="btn good block" data-act="nutriAll" data-d="${d}">✓ Hepsini tam aldım</button>
+  </div>`;
+}
+
+function ynRow(label, val, kind, id, d, yes = '✓', no = '✕') {
+  return `<div class="ck-row"><span>${label}</span><div class="yn">
+    <button class="${val === 1 ? 'y' : ''}" data-act="mark" data-kind="${kind}" data-id="${id}" data-d="${d}" data-v="1">${yes}</button>
+    <button class="${val === 0 ? 'n' : ''}" data-act="mark" data-kind="${kind}" data-id="${id}" data-d="${d}" data-v="0">${no}</button>
+  </div></div>`;
+}
+
+function openNutriItems() {
+  const items = S.nutrition.items.map(i => ({ ...i }));
+  const rows = () => items.map((it, i) => `<div class="item-edit">
+      <input class="field emoji" data-i="${i}" data-f="emoji" value="${esc(it.emoji)}" maxlength="4">
+      <input class="field" data-i="${i}" data-f="name" value="${esc(it.name)}" placeholder="Madde adı">
+      <button type="button" class="btn danger" data-del="${i}" aria-label="Sil">✕</button>
+    </div>`).join('');
+  openSheet(`${head('Beslenme ve Diğer maddeleri')}
+    <form id="niForm" novalidate>
+      <p class="muted" style="font-size:13.5px">Her gün iyi/kötü işaretleyeceğin maddeler. Uyku, şeker yok, adım sayısı gibi "diğer" maddeler de ekleyebilirsin. Silinen maddenin geçmiş kayıtları silinmez.</p>
+      <div id="niRows" class="stack">${rows()}</div>
+      <button type="button" class="btn block" id="niAdd">＋ Madde ekle</button>
+      <button class="btn primary block big" type="submit">Kaydet</button>
+    </form>`, body => {
+    const box = $('#niRows', body);
+    const sync = () => box.querySelectorAll('[data-f]').forEach(inp => { items[inp.dataset.i][inp.dataset.f] = inp.value; });
+    box.addEventListener('click', ev => {
+      const b = ev.target.closest('[data-del]'); if (!b) return;
+      sync(); items.splice(Number(b.dataset.del), 1); box.innerHTML = rows();
+    });
+    $('#niAdd', body).addEventListener('click', () => {
+      sync(); items.push({ id: 'n_' + uid(), name: '', emoji: '✨' }); box.innerHTML = rows();
+      box.querySelector(`[data-i="${items.length - 1}"][data-f="name"]`).focus();
+    });
+    $('#niForm', body).addEventListener('submit', ev => {
+      ev.preventDefault(); sync();
+      const clean = items.map(i => ({ ...i, name: i.name.trim(), emoji: i.emoji.trim() || '✨' })).filter(i => i.name);
+      if (!clean.length) { toast('En az bir madde olmalı'); return; }
+      S.nutrition.items = clean;
+      save(); closeSheet(); render(); toast('Maddeler kaydedildi');
+    });
+  });
+}
+
+/* ---------------- Günlük puan (4 alanın ortalaması) ----------------
+   Harcama: limit içi = 1, aşınca kademeli düşer (2 katı = 0)
+   İngilizce / Gym: yaptım = 1, yapmadım = 0
+   Beslenme: iyi işaretlenen maddelerin oranı
+   İşaretlenmeyen alanlar ortalamaya katılmaz. */
+const AREAS = [
+  { k: 'money', name: 'Harcama', emoji: '💰' },
+  { k: 'english', name: 'İngilizce', emoji: '📚' },
+  { k: 'gym', name: 'Spor', emoji: '🏋️' },
+  { k: 'food', name: 'Beslenme', emoji: '🥗' },
+];
+
+function dayParts(d) {
+  const out = {};
+  if (d > todayStr()) return out;
+  const info = dayInfo(d);
+  if (info) {
+    const r = info.limit > 0 ? info.spent / info.limit : (info.spent > 0 ? 2 : 0);
+    out.money = r <= 1 ? 1 : Math.max(0, 2 - r);
+  }
+  for (const h of S.habits) { const v = h.log[d]; if (v === 0 || v === 1) out[h.id] = v; }
+  const n = nutriDay(d);
+  if (n) out.food = n.score;
+  return out;
+}
+
+function dayScore(d) {
+  const v = Object.values(dayParts(d));
+  return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null;
+}
+
+// 0 = kırmızı, 0.5 = sarı, 1 = yeşil
+function scoreColor(s) {
+  const h = Math.round(s * 125);
+  const l = Math.round(50 - 10 * s + 10 * Math.sin(Math.PI * s));
+  return { bg: `hsl(${h} 70% ${l}%)`, fg: l > 52 ? '#2a2000' : '#fff' };
+}
+
+function rangeStats(a, b) {
+  const t = todayStr();
+  if (b > t) b = t;
+  const r = { days: 0, scored: 0, sum: 0, area: {}, money: { ok: 0, n: 0 }, english: 0, gym: 0, food: { g: 0, n: 0, full: 0 } };
+  for (let d = a; d <= b; d = addDays(d, 1)) {
+    r.days++;
+    const p = dayParts(d), vals = Object.values(p);
+    if (vals.length) { r.scored++; r.sum += vals.reduce((x, y) => x + y, 0) / vals.length; }
+    for (const [k, v] of Object.entries(p)) { const ar = r.area[k] || (r.area[k] = { s: 0, n: 0 }); ar.s += v; ar.n++; }
+    const info = dayInfo(d);
+    if (info) { r.money.n++; if (info.spent <= info.limit + 0.004) r.money.ok++; }
+    for (const h of S.habits) if (h.log[d] === 1) r[h.id] = (r[h.id] || 0) + 1;
+    const n = nutriDay(d);
+    if (n) { r.food.g += n.good; r.food.n += n.total; if (n.full) r.food.full++; }
+  }
+  r.avg = r.scored ? r.sum / r.scored : null;
+  return r;
+}
+
+const pctTxt = v => (v == null ? '—' : `%${nf0.format(v * 100)}`);
+
+/* ---------------- 6 aylık dönem ---------------- */
+function addMonths(s, n) {
+  const d = parseD(s);
+  const y = d.getFullYear(), m = d.getMonth() + n;
+  return toStr(new Date(y, m, Math.min(d.getDate(), new Date(y, m + 1, 0).getDate())));
+}
+const programEnd = p => addDays(addMonths(p.start, p.months), -1);
+function programMonths(p) {
+  const out = [];
+  for (let i = 0; i < p.months; i++) out.push({ i, a: addMonths(p.start, i), b: addDays(addMonths(p.start, i + 1), -1) });
+  return out;
+}
+
+function renderProgram() {
+  const p = S.program;
+  if (!p) {
+    return `<section class="card welcome">
+      <div class="welcome-emoji">🚀</div>
+      <h2>6 aylık dönemini başlat</h2>
+      <p class="muted">Harcama, İngilizce, spor ve beslenme tek yerde. Her gün yaptıklarına göre o günün rengi belirlenir; 6 ayı ay ay ısı haritasında izlersin.</p>
+      <button class="btn primary block big" data-act="progSetup">Dönemi başlat</button>
+    </section>`;
+  }
+  const t = todayStr(), end = programEnd(p);
+  const total = diffDays(p.start, end) + 1;
+  const dayN = Math.max(0, Math.min(total, diffDays(p.start, t) + 1));
+  const months = programMonths(p);
+  if (ui.progMonth == null) {
+    const cur = months.find(m => t >= m.a && t <= m.b);
+    ui.progMonth = cur ? cur.i : t < p.start ? 0 : months.length - 1;
+  }
+  const all = rangeStats(p.start, end);
+  const allC = all.avg != null ? scoreColor(all.avg) : null;
+
+  let html = `<section class="hero prog-hero">
+    <button class="period-line" data-act="progSetup">🗓️ ${fmtShort(p.start)} ${p.start.slice(0, 4)} – ${fmtShort(end)} ${end.slice(0, 4)} <span>Düzenle</span></button>
+    <div class="prog-top">
+      <div><div class="hero-label">${t < p.start ? 'Dönem henüz başlamadı' : t > end ? 'Dönem tamamlandı 🎉' : 'Dönemdeki günün'}</div>
+        <div class="hero-amount">${dayN}<small> / ${total}</small></div></div>
+      <div class="score-ring" style="${allC ? `background:${allC.bg};color:${allC.fg}` : ''}"><b>${pctTxt(all.avg)}</b><small>ortalama</small></div>
+    </div>
+    <div class="bar"><i style="width:${(dayN / total) * 100}%"></i></div>
+    <div class="hero-row"><span>%${nf0.format((dayN / total) * 100)} tamamlandı</span><span>${Math.max(0, total - dayN)} gün kaldı</span></div>
+  </section>`;
+
+  html += `<div class="area-grid">${AREAS.map(ar => areaTile(ar, all)).join('')}</div>`;
+
+  html += `<div class="section-title">Aylar</div>
+    <div class="month-tiles">${months.map(m => {
+      const st = m.a > t ? null : rangeStats(m.a, m.b);
+      const c = st && st.avg != null ? scoreColor(st.avg) : null;
+      return `<button class="mtile ${ui.progMonth === m.i ? 'on' : ''} ${m.a > t ? 'fut' : ''}" data-act="progMonth" data-k="${m.i}" style="${c ? `background:${c.bg};color:${c.fg}` : ''}">
+        <b>Ay ${m.i + 1}</b><small>${MONTHS[parseD(m.a).getMonth()].slice(0, 3)} – ${MONTHS[parseD(m.b).getMonth()].slice(0, 3)}</small><em>${st ? pctTxt(st.avg) : '—'}</em></button>`;
+    }).join('')}</div>`;
+
+  html += monthDetail(months[ui.progMonth]);
+  return html;
+}
+
+function areaTile(ar, st) {
+  const a = st.area[ar.k];
+  const v = a ? a.s / a.n : null;
+  const c = v != null ? scoreColor(v) : null;
+  const detail = {
+    money: st.money.n ? `${st.money.ok}/${st.money.n} gün limit içinde` : 'Bütçe dönemi yok',
+    english: `${st.english || 0} gün okuma`,
+    gym: `${st.gym || 0} gün · haftada ort. ${nf1.format(st.days ? ((st.gym || 0) / st.days) * 7 : 0)}`,
+    food: st.food.n ? `${st.food.full} tam gün · maddelerin %${nf0.format((st.food.g / st.food.n) * 100)}'i iyi` : 'Henüz işaret yok',
+  }[ar.k];
+  return `<div class="area"><div class="area-top"><span>${ar.emoji} ${ar.name}</span><b style="${c ? `color:${c.bg}` : ''}">${pctTxt(v)}</b></div>
+    <div class="cat-bar"><i style="width:${(v || 0) * 100}%;background:${c ? c.bg : 'transparent'}"></i></div><small>${detail}</small></div>`;
+}
+
+function monthDetail(m) {
+  const t = todayStr();
+  const st = rangeStats(m.a, m.b);
+  const gs = weekStart(m.a), ge = addDays(weekStart(m.b), 6);
+  let cells = '';
+  for (let d = gs; d <= ge; d = addDays(d, 1)) {
+    if (d < m.a || d > m.b) { cells += '<div class="cell empty"></div>'; continue; }
+    const s = dayScore(d);
+    let cls = 'cell', style = '';
+    if (d > t) cls += ' future';
+    else if (s != null) { const c = scoreColor(s); style = `background:${c.bg};color:${c.fg}`; }
+    if (d === t) cls += ' today';
+    const dn = parseD(d).getDate();
+    cells += `<button class="${cls}" style="${style}" data-act="progDay" data-d="${d}"><span>${dn}</span>${dn === 1 || d === m.a ? `<small>${MONTHS[parseD(d).getMonth()].slice(0, 3)}</small>` : s != null ? `<small>${nf0.format(s * 100)}</small>` : ''}</button>`;
+  }
+  return `<section class="card">
+    <div class="card-head">
+      <button class="icon-btn" data-act="progMonth" data-k="${Math.max(0, m.i - 1)}" ${m.i === 0 ? 'style="visibility:hidden"' : ''}>‹</button>
+      <h3>Ay ${m.i + 1} · ${fmtShort(m.a)} – ${fmtShort(m.b)}</h3>
+      <button class="icon-btn" data-act="progMonth" data-k="${Math.min(S.program.months - 1, m.i + 1)}" ${m.i === S.program.months - 1 ? 'style="visibility:hidden"' : ''}>›</button>
+    </div>
+    <div class="dow">${DOW_S.map(x => `<span>${x}</span>`).join('')}</div>
+    <div class="heat">${cells}</div>
+    <div class="legend"><span>Kötü</span><i class="lg-score"></i><span>İyi</span></div>
+    <p class="foot" style="text-align:left;margin-top:8px">Günün rengi: harcama, İngilizce, spor ve beslenmenin ortalaması. Güne dokunup işaretleyebilirsin.</p>
+  </section>
+  <section class="card">
+    <div class="card-head"><h3>Ay ${m.i + 1} özeti</h3><b>${pctTxt(st.avg)}</b></div>
+    <div class="area-grid flat">${AREAS.map(ar => areaTile(ar, st)).join('')}</div>
+  </section>`;
+}
+
+// Günün tüm alanlarını tek listede gösterir (Gelişim > Bugün ve 6 Ay > gün detayı)
+function checklist(d) {
+  const info = d <= todayStr() ? dayInfo(d) : null;
+  const moneyRow = info
+    ? `<div class="ck-row"><span>💰 Harcama</span><span class="pill ${info.spent > info.limit + 0.004 ? 'bad' : 'good'}">${moneyX(info.spent)} / ${money(info.limit)}</span></div>`
+    : '<div class="ck-row"><span>💰 Harcama</span><span class="muted" style="font-size:13px">bütçe dönemi yok</span></div>';
+  return `<div class="ck">
+    ${moneyRow}
+    ${S.habits.map(h => ynRow(`${h.emoji} ${esc(h.name)}`, h.log[d], 'habit', h.id, d)).join('')}
+    <div class="ck-sub">🥗 Beslenme ve Diğer</div>
+  </div>${nutriRows(d)}`;
+}
+
+function scoreBanner(d) {
+  const s = dayScore(d);
+  const c = s != null ? scoreColor(s) : null;
+  return `<div class="score-banner" style="${c ? `background:${c.bg};color:${c.fg}` : ''}">
+    <b>${s != null ? `%${nf0.format(s * 100)}` : '—'}</b><span>${s != null ? 'günün puanı · 4 alanın ortalaması' : 'Henüz işaretleme yok'}</span></div>`;
+}
+
+function todayCard() {
+  const t = todayStr();
+  const en = S.habits.find(h => h.id === 'english'), gym = S.habits.find(h => h.id === 'gym');
+  const es = en ? dailyStats(en) : null, gs = gym ? habitStats(gym) : null;
+  return `${scoreBanner(t)}
+    <div class="tiles">
+      <div class="tile"><span>📚 Seri</span><b>${es ? es.streak : 0} gün</b></div>
+      <div class="tile"><span>🏋️ Bu hafta</span><b>${gs ? `${gs.cur}/${gs.curT}` : '—'}</b></div>
+      <div class="tile"><span>🥗 Tam gün</span><b>${nutriStreak()} gün</b></div>
+    </div>
+    <section class="card">${checklist(t)}</section>`;
+}
+
+function openProgramDay(d, keepScroll) {
+  const panel = $('#sheet .sheet-panel');
+  const top = keepScroll ? panel.scrollTop : 0;
+  openSheet(`${head(`${fmtDate(d, true)} · ${DOW[dowIdx(d)]}`)}
+    <div class="stack">${scoreBanner(d)}${d > todayStr() ? '<div class="info-box">Gelecek günler işaretlenemez.</div>' : checklist(d)}</div>`);
+  panel.scrollTop = top;
+  ui.sheetDay = d;
+}
+
+function openProgramSetup() {
+  const p = S.program;
+  openSheet(`${head(p ? 'Dönemi düzenle' : '6 aylık dönem')}
+    <form id="pgForm" novalidate>
+      <label class="label">Dönemin adı<input class="field" id="pgName" value="${esc(p ? p.name : '6 Aylık Dönem')}"></label>
+      <label class="label">Başlangıç<input class="field" type="date" id="pgStart" value="${p ? p.start : todayStr()}"></label>
+      <div class="quick">
+        <button type="button" class="chip" data-q="today">Bugün</button>
+        <button type="button" class="chip" data-q="month">Bu ayın 1'i</button>
+        <button type="button" class="chip" data-q="next">Gelecek ayın 1'i</button>
+      </div>
+      <div class="info-box" id="pgInfo"></div>
+      <button class="btn primary block big" type="submit">Kaydet</button>
+      ${p ? '<button type="button" class="btn danger block" id="pgDel">Dönemi kaldır</button>' : ''}
+    </form>`, body => {
+    const st = $('#pgStart', body), info = $('#pgInfo', body);
+    const upd = () => {
+      if (!st.value) { info.textContent = 'Başlangıç tarihini seç.'; return; }
+      const e = programEnd({ start: st.value, months: 6 });
+      info.innerHTML = `Bitiş: <b>${fmtDate(e, true)}</b> · ${diffDays(st.value, e) + 1} gün`;
+    };
+    upd();
+    st.addEventListener('input', upd);
+    body.querySelector('.quick').addEventListener('click', ev => {
+      const b = ev.target.closest('[data-q]'); if (!b) return;
+      const n = new Date();
+      st.value = b.dataset.q === 'today' ? todayStr() : toStr(new Date(n.getFullYear(), n.getMonth() + (b.dataset.q === 'next' ? 1 : 0), 1));
+      upd();
+    });
+    const del = $('#pgDel', body);
+    if (del) del.addEventListener('click', () => {
+      if (!confirm('Dönem kaldırılsın mı? (Günlük işaretlerin silinmez)')) return;
+      S.program = null; ui.progMonth = null; save(); closeSheet(); render();
+    });
+    $('#pgForm', body).addEventListener('submit', ev => {
+      ev.preventDefault();
+      if (!st.value) { shake(st); return; }
+      S.program = { start: st.value, months: 6, name: $('#pgName', body).value.trim() || '6 Aylık Dönem' };
+      ui.progMonth = null;
+      save(); closeSheet(); render();
+      toast('Dönem kaydedildi 🚀');
+    });
+  });
 }
 
 function habitCard(h) {
@@ -936,6 +1355,7 @@ if (VV) { VV.addEventListener('resize', fitSheet); VV.addEventListener('scroll',
 
 function openSheet(html, mount) {
   const root = $('#sheet');
+  ui.sheetDay = null;
   root.querySelector('.sheet-body').innerHTML = html;
   root.querySelector('.sheet-panel').scrollTop = 0;
   root.classList.add('open');
@@ -947,6 +1367,7 @@ function openSheet(html, mount) {
 function closeSheet() {
   const root = $('#sheet');
   root.classList.remove('open', 'kb');
+  ui.sheetDay = null;
   root.style.top = root.style.height = '';
   root.setAttribute('aria-hidden', 'true');
   document.body.classList.remove('noscroll');
@@ -1400,6 +1821,38 @@ const ACT = {
   habitSet: el => {
     const h = S.habits.find(x => x.id === el.dataset.h), t = todayStr(), v = Number(el.dataset.v);
     if (h) setHabit(h.id, t, h.log[t] === v ? undefined : v);
+  },
+  devTab: el => { ui.devTab = el.dataset.k; render(); },
+  walletTab: el => { ui.walletTab = el.dataset.k; render(); },
+  progSetup: () => openProgramSetup(),
+  progMonth: el => { ui.progMonth = Number(el.dataset.k); render(); },
+  progDay: el => openProgramDay(el.dataset.d),
+  nmPrev: () => { const d = new Date(ui.nm.y, ui.nm.m - 1, 1); ui.nm = { y: d.getFullYear(), m: d.getMonth() }; render(); },
+  nmNext: () => { const d = new Date(ui.nm.y, ui.nm.m + 1, 1); ui.nm = { y: d.getFullYear(), m: d.getMonth() }; render(); },
+  nutriItems: () => openNutriItems(),
+  // İyi/kötü – yaptım/yapmadım işaretleri (aynı butona tekrar basmak işareti kaldırır)
+  mark: el => {
+    const { kind, id, d } = el.dataset, v = Number(el.dataset.v);
+    if (kind === 'habit') {
+      const h = S.habits.find(x => x.id === id);
+      if (h) setHabit(id, d, h.log[d] === v ? undefined : v);
+    } else {
+      const cur = (S.nutrition.log[d] || {})[id];
+      setNutri(d, id, cur === v ? undefined : v);
+      render();
+      const n = nutriDay(d);
+      if (v === 1 && n && n.full) { vibrate(); toast('🥗 Bugün hepsi tamam! 💚'); }
+    }
+    if (ui.sheetDay) openProgramDay(ui.sheetDay, true);
+  },
+  nutriAll: el => {
+    const d = el.dataset.d;
+    if (d > todayStr()) return;
+    const L = S.nutrition.log[d] = S.nutrition.log[d] || {};
+    for (const it of S.nutrition.items) L[it.id] = 1;
+    save(); render(); vibrate();
+    toast('🥗 Hepsi tamam! 💚');
+    if (ui.sheetDay) openProgramDay(ui.sheetDay, true);
   },
   rewards: el => openRewards(el.dataset.h),
   rewardClaim: el => {
